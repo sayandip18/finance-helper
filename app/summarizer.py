@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 
 from dotenv import load_dotenv
@@ -26,6 +27,27 @@ Output ONLY a JSON object matching this schema — no explanation, no markdown:
 }"""
 
 client = OpenAI()
+
+# Matches currency symbols with digits, large bare numbers (4+ digits), and shorthand amounts (10k, 5L).
+_VOLATILE_RE = re.compile(r"[₹$€£]\s*\d|\d\s*[₹$€£]|\b\d{4,}\b|\b\d+[kKlL]\b")
+
+
+def _strip_volatile(result: dict) -> dict:
+    """Drop any extracted strings that contain monetary amounts or large numbers."""
+    cleaned: dict = {"goal": result.get("goal", ""), "active_commitments": [], "spending_flags": []}
+
+    if _VOLATILE_RE.search(cleaned["goal"]):
+        print("[summarizer] goal contained volatile data — cleared.")
+        cleaned["goal"] = ""
+
+    for key in ("active_commitments", "spending_flags"):
+        for item in result.get(key, []):
+            if _VOLATILE_RE.search(item):
+                print(f"[summarizer] dropped volatile item from {key}: {item!r}")
+            else:
+                cleaned[key].append(item)
+
+    return cleaned
 
 
 def _build_transcript(messages: list[dict]) -> str:
@@ -69,7 +91,7 @@ def summarize_session(session_number: int) -> None:
     )
 
     raw = extraction.choices[0].message.content or "{}"
-    result = json.loads(raw)
+    result = _strip_volatile(json.loads(raw))
 
     if not any([result.get("goal"), result.get("active_commitments"), result.get("spending_flags")]):
         print(f"No insights extracted from session {session_number}.")
