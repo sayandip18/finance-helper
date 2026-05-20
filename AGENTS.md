@@ -9,7 +9,7 @@
                [ Extract Insights using cheap LLM model with background job]
                              |
                              v
-                 [ Save to vector DB ]
+                 [ Save to Memory JSON file ]
 ```
 
 ## Constraints

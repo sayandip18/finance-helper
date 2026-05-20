@@ -37,10 +37,10 @@ The `/chat` endpoint will be available at `http://localhost:8000/chat`.
 python main.py
 ```
 
-**Between sessions** — after Session 1 ends, summarize it into pgvector before starting Session 2:
+**Between sessions** — after Session 1 ends, summarize it into memory.json before starting Session 2:
 
 ```bash
-uv run summarize        # summarizes session 1
+uv run python -m app.summarizer # summarizes session 1
 ```
 
 This extracts long-term goals and commitments from the transcript (excluding volatile data like balances) and stores them as embeddings in the `session_insights` table.
@@ -51,4 +51,4 @@ This extracts long-term goals and commitments from the transcript (excluding vol
 python main.py
 ```
 
-The agent loads full conversation history from Postgres, so Session 2 remembers everything from Session 1.
+The agent loads full conversation history from DB, so Session 2 remembers everything from Session 1.
