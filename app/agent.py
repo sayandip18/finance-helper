@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any, cast
 
 from dotenv import load_dotenv
@@ -112,6 +113,19 @@ _OPENAI_TOOLS: list[Any] = [
 ]
 
 
+_FINANCIAL_RE = re.compile(
+    r'\b(balance|spend|spending|spent|afford|bill|transaction|transfer|'
+    r'budget|saving|savings|purchase|buy|bought|cost|income|expense|pay|'
+    r'payment|fund|account|debt|invest|investing|investment|mutual\s+fund|'
+    r'debit|credit|withdraw|deposit|net\s+worth|interest\s+rate)\b',
+    re.IGNORECASE,
+)
+
+
+def _is_financial_inquiry(user_input: str) -> bool:
+    return bool(_FINANCIAL_RE.search(user_input))
+
+
 def _execute_tool(name: str, args: dict) -> str:
     fn = TOOL_FUNCTIONS.get(name)
     if fn is None:
@@ -189,13 +203,18 @@ def process_user_message(user_input: str, session: int) -> dict[str, Any]:
     messages.append(user_msg)
     save_message(session, user_msg)
 
+    is_financial = _is_financial_inquiry(user_input)
     tool_calls_log: list[dict[str, Any]] = []
+    first_turn = True
 
     while True:
+        tool_choice = "required" if (first_turn and is_financial) else "auto"
+        first_turn = False
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=cast(Any, messages),
             tools=_OPENAI_TOOLS,
+            tool_choice=tool_choice,
         )
         assistant_msg = response.choices[0].message
         msg_dict = _assistant_msg_to_dict(assistant_msg)

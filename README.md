@@ -52,3 +52,7 @@ python main.py
 ```
 
 The agent loads full conversation history from DB, so Session 2 remembers everything from Session 1.
+
+## Hallucination guard — forced tool calls
+
+Before every user turn, a zero-latency keyword match checks the message against a set of financial terms (balance, spend, bill, savings, etc.). If any keyword matches, the first LLM call in the agentic loop is issued with `tool_choice="required"`, forcing the model to invoke at least one tool (e.g. `get_account_balance`, `get_recent_transactions`) before it can reply. Subsequent turns in the same loop revert to `tool_choice="auto"` so the model can chain further tool calls or produce a final answer.

@@ -3,13 +3,29 @@
 ## Project Architecture
 
 ```
-[ User Input ] ---> [ LLM Main Conversation Loop ] ---> [ Output to User ]
-                             |
-                             v
-               [ Extract Insights using cheap LLM model with background job]
-                             |
-                             v
-                 [ Save to Memory JSON file ]
+[ User Input ]
+      |
+      v
+[ Keyword Matcher ]  (zero-latency, no LLM call)
+      |
+      +-- match --> tool_choice = "required"  ─┐
+      |                                         |
+      +-- no match --> tool_choice = "auto"  ──┤
+                                               |
+                                               v
+                              [ LLM Main Conversation Loop ]
+                                   (gpt-4o + tool calls)
+                                first turn: tool_choice above
+                               subsequent turns: tool_choice="auto"
+                                               |
+                                               v
+                                   [ Output to User ]
+                                               |
+                                               v
+                        [ Extract Insights (gpt-4o-mini, background) ]
+                                               |
+                                               v
+                                     [ Save to Memory DB ]
 ```
 
 ## Constraints
