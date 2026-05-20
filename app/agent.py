@@ -171,23 +171,67 @@ def _assistant_msg_to_dict(msg: ChatCompletionMessage) -> dict[str, Any]:
     return d
 
 
-def run():
-    setup_db()
-    messages = load_session_messages(CURRENT_SESSION)
-
+def process_user_message(user_input: str, session: int) -> dict[str, Any]:
+    """Run one user turn through the agentic loop. Returns reply, session, and tool_calls."""
+    messages = load_session_messages(session)
     system_msg = {"role": "system", "content": _build_system_prompt()}
 
     if not messages:
         messages.append(system_msg)
-        save_message(CURRENT_SESSION, system_msg)
-        print(f"Hi {USER_PROFILE['name']}! I'm your finance companion. How can I help you today?")
+        save_message(session, system_msg)
     else:
-        # Rebuild system message each session so injected memories are always fresh
         if messages[0].get("role") == "system":
             messages[0] = system_msg
         else:
             messages.insert(0, system_msg)
+
+    user_msg = {"role": "user", "content": user_input}
+    messages.append(user_msg)
+    save_message(session, user_msg)
+
+    tool_calls_log: list[dict[str, Any]] = []
+
+    while True:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=cast(Any, messages),
+            tools=_OPENAI_TOOLS,
+        )
+        assistant_msg = response.choices[0].message
+        msg_dict = _assistant_msg_to_dict(assistant_msg)
+        messages.append(msg_dict)
+        save_message(session, msg_dict)
+
+        if response.choices[0].finish_reason != "tool_calls":
+            return {
+                "reply": assistant_msg.content or "",
+                "session": session,
+                "tool_calls": tool_calls_log,
+            }
+
+        for tc in assistant_msg.tool_calls or []:
+            if not isinstance(tc, ChatCompletionMessageToolCall):
+                continue
+            args = json.loads(tc.function.arguments)
+            raw = _execute_tool(tc.function.name, args)
+            processed = _process_tool_result(tc.function.name, raw)
+            tool_calls_log.append({
+                "name": tc.function.name,
+                "args": args,
+                "result": json.loads(processed),
+            })
+            tool_msg = {"role": "tool", "tool_call_id": tc.id, "content": processed}
+            messages.append(tool_msg)
+            save_message(session, tool_msg)
+
+
+def run():
+    setup_db()
+    existing = load_session_messages(CURRENT_SESSION)
+    if existing:
         print(f"Welcome back, {USER_PROFILE['name']}! I remember our previous conversations. How can I help?")
+    else:
+        print(f"Hi {USER_PROFILE['name']}! I'm your finance companion. How can I help you today?")
 
     while True:
         try:
@@ -200,31 +244,5 @@ def run():
             print("Goodbye!")
             break
 
-        user_msg = {"role": "user", "content": user_input}
-        messages.append(user_msg)
-        save_message(CURRENT_SESSION, user_msg)
-
-        # Agentic loop: keep going until there are no more tool calls
-        while True:
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=cast(Any, messages),
-                tools=_OPENAI_TOOLS,
-            )
-            assistant_msg = response.choices[0].message
-            msg_dict = _assistant_msg_to_dict(assistant_msg)
-            messages.append(msg_dict)
-            save_message(CURRENT_SESSION, msg_dict)
-
-            if response.choices[0].finish_reason != "tool_calls":
-                print(f"\nAssistant: {assistant_msg.content}")
-                break
-
-            for tc in assistant_msg.tool_calls or []:
-                if not isinstance(tc, ChatCompletionMessageToolCall):
-                    continue
-                args = json.loads(tc.function.arguments)
-                result = _process_tool_result(tc.function.name, _execute_tool(tc.function.name, args))
-                tool_msg = {"role": "tool", "tool_call_id": tc.id, "content": result}
-                messages.append(tool_msg)
-                save_message(CURRENT_SESSION, tool_msg)
+        result = process_user_message(user_input, CURRENT_SESSION)
+        print(f"\nAssistant: {result['reply']}")

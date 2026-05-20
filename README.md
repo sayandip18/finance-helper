@@ -54,6 +54,14 @@ docker rm -f finance-pg
 
 Then re-run the `docker run` command above.
 
+## Running the API server
+
+```bash
+fastapi dev app/main.py
+```
+
+The `/chat` endpoint will be available at `http://localhost:8000/chat`.
+
 ## Running the app
 
 **Session 1** — ensure `CURRENT_SESSION = 1` in `app/tools.py`, then:
