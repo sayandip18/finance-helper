@@ -66,7 +66,6 @@ python main.py
 
 ```bash
 uv run summarize        # summarizes session 1
-uv run summarize 2      # summarizes session 2 (after flipping CURRENT_SESSION)
 ```
 
 This extracts long-term goals and commitments from the transcript (excluding volatile data like balances) and stores them as embeddings in the `session_insights` table.

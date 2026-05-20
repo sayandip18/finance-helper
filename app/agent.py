@@ -14,8 +14,13 @@ load_dotenv()
 
 client = OpenAI()
 
+_SESSION_DATES = {1: "Monday, November 3, 2025", 2: "Thursday, November 6, 2025"}
+_TODAY = _SESSION_DATES[CURRENT_SESSION]
+
 _SYSTEM_PROMPT_BASE = f"""You are a personal AI finance companion for {USER_PROFILE['name']}, \
 a {USER_PROFILE['age']}-year-old living in {USER_PROFILE['city']}.
+
+Today's date: {_TODAY}
 
 User profile:
 - Monthly income (post-tax): ₹{USER_PROFILE['monthly_income_inr']:,}, credited on the 1st of each month
@@ -107,6 +112,40 @@ def _execute_tool(name: str, args: dict) -> str:
     return json.dumps(fn(**args))
 
 
+def _process_tool_result(tool_name: str, raw_result: str) -> str:
+    try:
+        data = json.loads(raw_result)
+    except json.JSONDecodeError:
+        return raw_result
+
+    if tool_name == "get_recent_transactions":
+        by_category: dict[str, float] = {}
+        for t in data:
+            if t["amount"] < 0:
+                cat = t["category"]
+                by_category[cat] = by_category.get(cat, 0) + abs(t["amount"])
+        total_spend = sum(by_category.values())
+        return json.dumps({
+            "spend_by_category_inr": {k: round(v, 2) for k, v in sorted(
+                by_category.items(), key=lambda x: x[1], reverse=True
+            )},
+            "total_spend_inr": round(total_spend, 2),
+        })
+
+    if tool_name == "get_upcoming_bills":
+        total = sum(abs(b["amount"]) for b in data)
+        return json.dumps({
+            "bills": data,
+            "total_due_inr": round(total, 2),
+        })
+
+    if tool_name == "get_account_balance":
+        liquid = data.get("checking", 0) + data.get("savings", 0)
+        return json.dumps({**data, "liquid_total_inr": round(liquid, 2)})
+
+    return raw_result
+
+
 def _assistant_msg_to_dict(msg: ChatCompletionMessage) -> dict[str, Any]:
     d: dict[str, Any] = {"role": "assistant", "content": msg.content}
     if msg.tool_calls:
@@ -176,7 +215,7 @@ def run():
                 if not isinstance(tc, ChatCompletionMessageToolCall):
                     continue
                 args = json.loads(tc.function.arguments)
-                result = _execute_tool(tc.function.name, args)
+                result = _process_tool_result(tc.function.name, _execute_tool(tc.function.name, args))
                 tool_msg = {"role": "tool", "tool_call_id": tc.id, "content": result}
                 messages.append(tool_msg)
                 save_message(CURRENT_SESSION, tool_msg)
