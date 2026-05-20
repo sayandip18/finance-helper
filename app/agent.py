@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageToolCall
 
-from app.db import load_insights, load_messages, save_message, setup_db
+from app.db import append_reminder, load_memory, load_session_messages, save_message, setup_db
 from app.model.user import USER_PROFILE
 from app.tools import CURRENT_SESSION
 from app.tools import TOOLS as TOOL_FUNCTIONS
@@ -38,13 +38,20 @@ CRITICAL TOOL DISCIPLINE:
 """
 
 
-def _build_system_prompt(previous_session: int | None) -> str:
-    if previous_session is None:
+def _build_system_prompt() -> str:
+    memory = load_memory()
+    parts = []
+    if memory.get("goal"):
+        parts.append(f"Goal: {memory['goal']}")
+    for commitment in memory.get("active_commitments", []):
+        parts.append(f"Commitment: {commitment}")
+    for flag in memory.get("spending_flags", []):
+        parts.append(f"Spending flag: {flag}")
+    for reminder in memory.get("reminders", []):
+        parts.append(f"Reminder ({reminder['date']}): {reminder['content']}")
+    if not parts:
         return _SYSTEM_PROMPT_BASE
-    insights = load_insights(previous_session)
-    if not insights:
-        return _SYSTEM_PROMPT_BASE
-    memory_block = "\n".join(f"- {insight}" for insight in insights)
+    memory_block = "\n".join(f"- {p}" for p in parts)
     return _SYSTEM_PROMPT_BASE + f"\n<injected_memories>\n{memory_block}\n</injected_memories>"
 
 _OPENAI_TOOLS: list[Any] = [
@@ -109,7 +116,10 @@ def _execute_tool(name: str, args: dict) -> str:
     fn = TOOL_FUNCTIONS.get(name)
     if fn is None:
         return f"Unknown tool: {name}"
-    return json.dumps(fn(**args))
+    result = fn(**args)
+    if name == "set_reminder" and result.get("status") == "set":
+        append_reminder(result["date"], result["content"])
+    return json.dumps(result)
 
 
 def _process_tool_result(tool_name: str, raw_result: str) -> str:
@@ -163,10 +173,9 @@ def _assistant_msg_to_dict(msg: ChatCompletionMessage) -> dict[str, Any]:
 
 def run():
     setup_db()
-    messages = load_messages()
+    messages = load_session_messages(CURRENT_SESSION)
 
-    previous_session = CURRENT_SESSION - 1 if CURRENT_SESSION > 1 else None
-    system_msg = {"role": "system", "content": _build_system_prompt(previous_session)}
+    system_msg = {"role": "system", "content": _build_system_prompt()}
 
     if not messages:
         messages.append(system_msg)

@@ -1,92 +1,103 @@
 import json
 import os
+import sqlite3
 
-import psycopg
-from psycopg.rows import dict_row
-from dotenv import load_dotenv
+_DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+_DB_PATH = os.path.join(_DATA_DIR, "sessions.db")
+_MEMORY_PATH = os.path.join(_DATA_DIR, "memory.json")
 
-load_dotenv()
+_EMPTY_MEMORY = {
+    "goal": "",
+    "active_commitments": [],
+    "reminders": [],
+    "spending_flags": [],
+}
 
 
-def _connect():
-    return psycopg.connect(os.environ["DATABASE_URL"])
+def _ensure_data_dir() -> None:
+    os.makedirs(_DATA_DIR, exist_ok=True)
 
 
-def setup_db():
+def _connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def setup_db() -> None:
+    _ensure_data_dir()
     with _connect() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS messages (
-                id          SERIAL PRIMARY KEY,
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_number INTEGER NOT NULL,
-                role        TEXT NOT NULL,
-                content     TEXT,
-                raw_message JSONB NOT NULL,
-                created_at  TIMESTAMPTZ DEFAULT NOW()
+                role           TEXT NOT NULL,
+                content        TEXT,
+                raw_message    TEXT NOT NULL,
+                created_at     TEXT DEFAULT (datetime('now'))
             )
         """)
         conn.commit()
 
 
-def setup_vector_db():
-    with _connect() as conn:
-        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS session_insights (
-                id              SERIAL PRIMARY KEY,
-                session_number  INTEGER NOT NULL,
-                insight         TEXT NOT NULL,
-                embedding       VECTOR(1536),
-                created_at      TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        conn.commit()
-
-
-def load_messages() -> list[dict]:
-    with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as conn:
-        rows = conn.execute(
-            "SELECT raw_message FROM messages ORDER BY id ASC"
-        ).fetchall()
-    return [row["raw_message"] for row in rows]
-
-
-def load_session_messages(session_number: int) -> list[dict]:
-    with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as conn:
-        rows = conn.execute(
-            "SELECT raw_message FROM messages WHERE session_number = %s ORDER BY id ASC",
-            (session_number,),
-        ).fetchall()
-    return [row["raw_message"] for row in rows]
-
-
-def save_insights(session_number: int, insights: list[str], embeddings: list[list[float]]) -> None:
-    with _connect() as conn:
-        for insight, embedding in zip(insights, embeddings):
-            conn.execute(
-                "INSERT INTO session_insights (session_number, insight, embedding) VALUES (%s, %s, %s::vector)",
-                (session_number, insight, json.dumps(embedding)),
-            )
-        conn.commit()
-
-
-def load_insights(session_number: int) -> list[str]:
-    try:
-        with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as conn:
-            rows = conn.execute(
-                "SELECT insight FROM session_insights WHERE session_number = %s ORDER BY id ASC",
-                (session_number,),
-            ).fetchall()
-        return [row["insight"] for row in rows]
-    except Exception:
-        return []
-
-
-def save_message(session_number: int, message: dict):
+def save_message(session_number: int, message: dict) -> None:
     role = message.get("role", "")
     content = message.get("content") if isinstance(message.get("content"), str) else None
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO messages (session_number, role, content, raw_message) VALUES (%s, %s, %s, %s)",
+            "INSERT INTO messages (session_number, role, content, raw_message) VALUES (?, ?, ?, ?)",
             (session_number, role, content, json.dumps(message)),
         )
         conn.commit()
+
+
+def load_session_messages(session_number: int) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT raw_message FROM messages WHERE session_number = ? ORDER BY id ASC",
+            (session_number,),
+        ).fetchall()
+    return [json.loads(row["raw_message"]) for row in rows]
+
+
+def load_memory() -> dict:
+    if not os.path.exists(_MEMORY_PATH):
+        return dict(_EMPTY_MEMORY)
+    with open(_MEMORY_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_memory(memory: dict) -> None:
+    _ensure_data_dir()
+    with open(_MEMORY_PATH, "w", encoding="utf-8") as f:
+        json.dump(memory, f, ensure_ascii=False, indent=2)
+
+
+def merge_memory(updates: dict) -> None:
+    """Merge extracted session insights into memory.json.
+
+    - goal: overwritten only if updates provides a non-empty value
+    - active_commitments / spending_flags: new items appended, duplicates dropped
+    - reminders: not touched here (written live by set_reminder interception)
+    """
+    current = load_memory()
+
+    if updates.get("goal"):
+        current["goal"] = updates["goal"]
+
+    for key in ("active_commitments", "spending_flags"):
+        existing = set(current.get(key, []))
+        for item in updates.get(key, []):
+            if item not in existing:
+                current.setdefault(key, []).append(item)
+                existing.add(item)
+
+    save_memory(current)
+
+
+def append_reminder(date: str, content: str) -> None:
+    memory = load_memory()
+    entry = {"date": date, "content": content}
+    if entry not in memory.get("reminders", []):
+        memory.setdefault("reminders", []).append(entry)
+    save_memory(memory)
