@@ -24,7 +24,7 @@ cp .env.example .env
 ## Running the API server
 
 ```bash
-fastapi dev app/main.py
+fastapi dev main.py
 ```
 
 The `/chat` endpoint will be available at `http://localhost:8000/chat`.
