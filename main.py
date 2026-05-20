@@ -1,6 +1,4 @@
-def main():
-    print("Hello from finance-helper!")
-
+from app.agent import run
 
 if __name__ == "__main__":
-    main()
+    run()
