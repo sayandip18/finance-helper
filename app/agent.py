@@ -7,6 +7,7 @@ from openai import OpenAI
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageToolCall
 
 from app.db import append_reminder, load_memory, load_session_messages, save_message, setup_db
+from app.logger import log_event
 from app.model.user import USER_PROFILE
 from app.tools import CURRENT_SESSION
 from app.tools import TOOLS as TOOL_FUNCTIONS
@@ -126,13 +127,14 @@ def _is_financial_inquiry(user_input: str) -> bool:
     return bool(_FINANCIAL_RE.search(user_input))
 
 
-def _execute_tool(name: str, args: dict) -> str:
+def _execute_tool(name: str, args: dict, session: int) -> str:
     fn = TOOL_FUNCTIONS.get(name)
     if fn is None:
         return f"Unknown tool: {name}"
     result = fn(**args)
     if name == "set_reminder" and result.get("status") == "set":
         append_reminder(result["date"], result["content"])
+    log_event(event="tool_call", session=session, name=name, args=args, result=result)
     return json.dumps(result)
 
 
@@ -232,7 +234,7 @@ def process_user_message(user_input: str, session: int) -> dict[str, Any]:
             if not isinstance(tc, ChatCompletionMessageToolCall):
                 continue
             args = json.loads(tc.function.arguments)
-            raw = _execute_tool(tc.function.name, args)
+            raw = _execute_tool(tc.function.name, args, session)
             processed = _process_tool_result(tc.function.name, raw)
             tool_calls_log.append({
                 "name": tc.function.name,

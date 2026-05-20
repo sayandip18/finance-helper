@@ -2,6 +2,8 @@ import json
 import os
 import sqlite3
 
+from app.logger import log_event
+
 _DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 _DB_PATH = os.path.join(_DATA_DIR, "sessions.db")
 _MEMORY_PATH = os.path.join(_DATA_DIR, "memory.json")
@@ -62,9 +64,12 @@ def load_session_messages(session_number: int) -> list[dict]:
 
 def load_memory() -> dict:
     if not os.path.exists(_MEMORY_PATH):
-        return dict(_EMPTY_MEMORY)
-    with open(_MEMORY_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+        data = dict(_EMPTY_MEMORY)
+    else:
+        with open(_MEMORY_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    log_event(event="memory_read", memory=data)
+    return data
 
 
 def save_memory(memory: dict) -> None:
@@ -74,6 +79,7 @@ def save_memory(memory: dict) -> None:
 
 
 def merge_memory(updates: dict) -> None:
+    log_event(event="memory_write", via="merge_memory", updates=updates)
     """Merge extracted session insights into memory.json.
 
     - goal: overwritten only if updates provides a non-empty value
@@ -96,6 +102,7 @@ def merge_memory(updates: dict) -> None:
 
 
 def append_reminder(date: str, content: str) -> None:
+    log_event(event="memory_write", via="append_reminder", date=date, content=content)
     memory = load_memory()
     entry = {"date": date, "content": content}
     if entry not in memory.get("reminders", []):
