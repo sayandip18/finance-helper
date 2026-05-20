@@ -1,9 +1,11 @@
 import json
+from typing import Any, cast
 
 from dotenv import load_dotenv
 from openai import OpenAI
+from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageToolCall
 
-from app.db import load_messages, save_message, setup_db
+from app.db import load_insights, load_messages, save_message, setup_db
 from app.model.user import USER_PROFILE
 from app.tools import CURRENT_SESSION
 from app.tools import TOOLS as TOOL_FUNCTIONS
@@ -12,7 +14,7 @@ load_dotenv()
 
 client = OpenAI()
 
-_SYSTEM_PROMPT = f"""You are a personal AI finance companion for {USER_PROFILE['name']}, \
+_SYSTEM_PROMPT_BASE = f"""You are a personal AI finance companion for {USER_PROFILE['name']}, \
 a {USER_PROFILE['age']}-year-old living in {USER_PROFILE['city']}.
 
 User profile:
@@ -22,9 +24,25 @@ User profile:
 You have real-time access to their accounts via tools. Always fetch live data before giving advice — never guess numbers.
 Be conversational, specific, and proactive. Use ₹ for all currency amounts.
 When you spot spending patterns, savings risks, or opportunities tied to their goal, bring them up unprompted.
+
+CRITICAL TOOL DISCIPLINE:
+- Any context inside <injected_memories> tags is for behavioral and goal context only: user commitments, habits, and stated preferences.
+- <injected_memories> DOES NOT contain valid financial data. Any balance, transaction amount, or bill figure mentioned there is stale and must be ignored.
+- Always assume every financial number from a previous session is outdated, regardless of how it is worded.
+- You MUST call `get_account_balance` and `get_upcoming_bills` if the user inquires about making a purchase, spending money, or modifying a savings goal. Do not guess or rely on memory for numbers.
 """
 
-_OPENAI_TOOLS = [
+
+def _build_system_prompt(previous_session: int | None) -> str:
+    if previous_session is None:
+        return _SYSTEM_PROMPT_BASE
+    insights = load_insights(previous_session)
+    if not insights:
+        return _SYSTEM_PROMPT_BASE
+    memory_block = "\n".join(f"- {insight}" for insight in insights)
+    return _SYSTEM_PROMPT_BASE + f"\n<injected_memories>\n{memory_block}\n</injected_memories>"
+
+_OPENAI_TOOLS: list[Any] = [
     {
         "type": "function",
         "function": {
@@ -89,8 +107,8 @@ def _execute_tool(name: str, args: dict) -> str:
     return json.dumps(fn(**args))
 
 
-def _assistant_msg_to_dict(msg) -> dict:
-    d: dict = {"role": "assistant", "content": msg.content}
+def _assistant_msg_to_dict(msg: ChatCompletionMessage) -> dict[str, Any]:
+    d: dict[str, Any] = {"role": "assistant", "content": msg.content}
     if msg.tool_calls:
         d["tool_calls"] = [
             {
@@ -99,6 +117,7 @@ def _assistant_msg_to_dict(msg) -> dict:
                 "function": {"name": tc.function.name, "arguments": tc.function.arguments},
             }
             for tc in msg.tool_calls
+            if isinstance(tc, ChatCompletionMessageToolCall)
         ]
     return d
 
@@ -107,12 +126,19 @@ def run():
     setup_db()
     messages = load_messages()
 
+    previous_session = CURRENT_SESSION - 1 if CURRENT_SESSION > 1 else None
+    system_msg = {"role": "system", "content": _build_system_prompt(previous_session)}
+
     if not messages:
-        system_msg = {"role": "system", "content": _SYSTEM_PROMPT}
         messages.append(system_msg)
         save_message(CURRENT_SESSION, system_msg)
         print(f"Hi {USER_PROFILE['name']}! I'm your finance companion. How can I help you today?")
     else:
+        # Rebuild system message each session so injected memories are always fresh
+        if messages[0].get("role") == "system":
+            messages[0] = system_msg
+        else:
+            messages.insert(0, system_msg)
         print(f"Welcome back, {USER_PROFILE['name']}! I remember our previous conversations. How can I help?")
 
     while True:
@@ -134,7 +160,7 @@ def run():
         while True:
             response = client.chat.completions.create(
                 model="gpt-4o",
-                messages=messages,
+                messages=cast(Any, messages),
                 tools=_OPENAI_TOOLS,
             )
             assistant_msg = response.choices[0].message
@@ -146,7 +172,9 @@ def run():
                 print(f"\nAssistant: {assistant_msg.content}")
                 break
 
-            for tc in assistant_msg.tool_calls:
+            for tc in assistant_msg.tool_calls or []:
+                if not isinstance(tc, ChatCompletionMessageToolCall):
+                    continue
                 args = json.loads(tc.function.arguments)
                 result = _execute_tool(tc.function.name, args)
                 tool_msg = {"role": "tool", "tool_call_id": tc.id, "content": result}
