@@ -67,7 +67,8 @@ def load_memory() -> dict:
         data = dict(_EMPTY_MEMORY)
     else:
         with open(_MEMORY_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            content = f.read().strip()
+            data = json.loads(content) if content else dict(_EMPTY_MEMORY)
     log_event(event="memory_read", memory=data)
     return data
 
