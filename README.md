@@ -53,6 +53,17 @@ python main.py
 
 The agent loads full conversation history from DB, so Session 2 remembers everything from Session 1.
 
+## Persistent memory — memory.json
+
+Between sessions the agent maintains a `data/memory.json` file that stores long-term context about the user. It is read at the start of every session and updated as the conversation progresses. We generate this memory json using the summarizer command.
+
+1. **`goal`** _(string)_ — The user's stated financial goal (e.g. "save ₹10 000 per month"). Overwritten whenever a new goal is expressed.
+2. **`active_commitments`** _(list of strings)_ — Things the user has explicitly committed to do (e.g. "cancel unused subscriptions"). New items are appended; duplicates are dropped.
+3. **`reminders`** _(list of `{date, content}`)_ — Date-stamped reminders set during a session via the `set_reminder` tool. Written live, not at summarization time.
+4. **`spending_flags`** _(list of strings)_ — Spending patterns flagged for the user's attention. New items are appended; duplicates are dropped.
+
+Volatile data (account balances, transaction amounts) is intentionally excluded — only stable, goal-relevant insights are persisted.
+
 ## Hallucination guard — forced tool calls
 
 Before every user turn, a zero-latency keyword match checks the message against a set of financial terms (balance, spend, bill, savings, etc.). If any keyword matches, the first LLM call in the agentic loop is issued with `tool_choice="required"`, forcing the model to invoke at least one tool (e.g. `get_account_balance`, `get_recent_transactions`) before it can reply. Subsequent turns in the same loop revert to `tool_choice="auto"` so the model can chain further tool calls or produce a final answer.

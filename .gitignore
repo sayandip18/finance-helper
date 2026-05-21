@@ -15,3 +15,4 @@ wheels/
 # data layer
 sessions.db
 memory.json
+events.log
